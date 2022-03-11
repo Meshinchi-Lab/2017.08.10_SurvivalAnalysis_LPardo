@@ -1,0 +1,415 @@
+---
+title: "Survival Analysis CD117 and CD123"
+author: "Jenny Smith"
+date: "August 10, 2017"
+output:
+  word_document: default
+  html_document: default
+---
+
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2017.08.10_SurvivalAnalysis_LPardo/')
+```
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+getwd()
+```
+
+```{r}
+source("~/scripts/survival_analysis/Survplot_Functions_2017.03.31.r")
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/rmDupGenes_Function.r")
+source("~/scripts/conversion_scripts/Ensembl_ID_Convert_Function.r")
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/ggplot_Themes_Function.r")
+```
+
+#Read in the clinical data
+
+```{r}
+#Orignial dataset used for CDE
+# CDE.0531 <- read.csv("~/reference_mapping-files/TARGET_AML_current_asof_june30_2016_UPDATED_RhondaEdit_2017.06.08.csv", stringsAsFactors = FALSE, row.names = 1)
+CDE.0531 <- read.csv("~/reference_mapping-files/TARGET_AML_current_asof_june30_2016_UPDATED_CLEAN_4.19.18.csv", 
+                     stringsAsFactors = FALSE)
+head(CDE.0531[,1:4])
+```
+
+```{r}
+#original dataset used for CDE
+# CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_AAML1031_merged_CDE_Cleaned_14July2017.csv", 
+#                      stringsAsFactors = FALSE, row.names = 1)
+
+CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_1031_CDE_cleaned_5.14.18.csv", 
+                     stringsAsFactors = FALSE)
+
+head(CDE.1031[,1:4])
+```
+
+
+#Read in the Groups for CD117 and CD123
+
+##AAML0531
+```{r}
+CD117 <- read.csv("COG_0531_117_log_normal_two_categories.csv", stringsAsFactors = FALSE, row.names = 1)
+CD117[CD117 == ""] <- NA
+head(CD117)
+```
+
+```{r}
+dim(CD117) #769
+```
+
+##AAML1031
+```{r}
+CD.Groups <- read.csv("COG1031_117_123_log_normal_two_categories.csv", stringsAsFactors = FALSE)
+CD.Groups <- transform(CD.Groups[complete.cases(CD.Groups), ], row.names=COGID, COGID=NULL) 
+CD.Groups[CD.Groups == ""] <- NA
+head(CD.Groups)
+```
+
+```{r}
+dim(CD.Groups) #897
+```
+
+
+#Read in Flow Cytometry data
+
+```{r}
+flow <- read.csv("TARGET_AML_CBFGLIS_PatientUSI_27June2017-2017-7-18FD_FLOWcytometetryData.csv", stringsAsFactors = FALSE, row.names = 1)
+flow <- as.data.frame(flow[complete.cases(flow),])
+head(flow[,1:5])
+```
+
+```{r}
+dim(flow)
+```
+
+
+
+
+#Read in the RNA-seq Expression 
+
+```{r message=FALSE}
+options(scipen = 999)
+# HD <- read.csv("TARGET_AML_TPM_Aug2014.csv", stringsAsFactors = FALSE, row.names = 1)
+# HD <- convert_Dx_Rx(HD, Keys = "ensemblSymbol",ID = "GENEID", subset = "Dx") 
+```
+
+no non-missing arguments to max; returning -InfError in xj[i] : invalid subscript type 'list'
+
+```{r}
+# HD.rmDup <- HD[,-1] %>% rmDupGenes("SYMBOL")
+# summary(HD.rmDup)
+# HD <- merge(HD$GENEID, LD, by.x=)
+```
+
+there are TONS of NAs during the ID converson.. So, its best to A) parse the ensembl v69 annotations to which this RNA seq counts were annotated and less optimally B) use the LD as a conversion. 
+
+
+```{r}
+TPM.LD <- read.csv("ExpressionData/TARGET_AML_TPM_withEnsemblID_BCCA28Apr2016.csv", stringsAsFactors = FALSE)
+LD <- TPM.LD[,-2] %>% rmDupGenes("geneSymbol")
+dim(LD$remDups)
+```
+
+```{r}
+# save(LD,file="TARGET_AML_LowDepth_TPM_rmDups.RData")
+```
+
+#Merge Clinical Data with Groups
+
+```{r}
+CD117.0531 <- merge(CDE.0531, CD117, by.x="Reg.", by.y = 0)
+head(CD117.0531[,1:4])
+```
+
+
+```{r}
+dim(CD117) #769
+```
+
+```{r}
+CDgroups.1031 <- merge(CDE.1031, CD.Groups, by.x="Patient.ID", by.y=0)
+
+head(CDgroups.1031[,1:4])
+```
+
+
+```{r}
+dim(CDgroups.1031) #893 
+```
+
+
+ Run with and without the NAs in the EFS
+ 
+```{r}
+CDgroups.1031 <- CDgroups.1031 %>%
+  filter(!is.na(efsi))
+```
+
+
+#Perform Survival Analysis
+
+##AAML0531
+
+```{r}
+OS.0531.cols <- c("Overall.Survival.Time.in.Days", "OS.ID")
+EFS.0531.cols <- c("Event.Free.Survival.Time.in.Days", "Event.ID")
+```
+
+```{r}
+# CD117.group.names <- colnames(CD117.0531)[79:82]
+CD117.group.names <- colnames(CD117.0531)[132:135]
+
+CD117.group.names
+```
+
+```{r}
+#factor Levels for the CD117 groups
+lapply(CD117.0531[,CD117.group.names], unique)
+```
+
+
+##OS
+```{r message=FALSE}
+CD117.OS <- lapply(CD117.group.names, SurvObjects, df=CD117.0531, colNames=OS.0531.cols, time="DtoY") %>%
+  set_names(CD117.group.names)
+summary(CD117.OS)
+```
+
+##EFS
+```{r}
+CD117.EFS <- lapply(CD117.group.names, SurvObjects, df=CD117.0531, colNames=EFS.0531.cols, time="DtoY") %>%
+  set_names(CD117.group.names)
+summary(CD117.EFS)
+```
+
+##AAML1031
+
+```{r}
+OS.1031.cols <- c("yrsos", "osi")
+EFS.1031.cols <- c("yrsefs", "efsi")
+```
+
+```{r}
+CDgroup.names <- colnames(CDgroups.1031)[75:82]
+CDgroup.names
+```
+
+```{r}
+#Factor Levels for the Groups in 1031
+lapply(CDgroups.1031[, CDgroup.names], unique)
+```
+
+##OS 
+```{r}
+OS.1031 <- lapply(CDgroup.names, SurvObjects, df=CDgroups.1031, colNames=OS.1031.cols) %>% 
+  set_names(CDgroup.names)
+summary(OS.1031)
+```
+
+##EFS
+```{r}
+EFS.1031 <- lapply(CDgroup.names, SurvObjects, df=CDgroups.1031, colNames=EFS.1031.cols) %>% 
+  set_names(CDgroup.names)
+summary(EFS.1031)
+```
+
+#Kaplan Meier Plots
+
+```{r}
+KM_CustomPlots <- function(SurvObjects.res,type, group){
+  #SurvObjects.res is the results from running SurvObjects()
+  # type is a character string of the type of survival - OS or EFS, etc used for the title of plot
+  #group is a character string of the grouping - eg CD117_log_Cat from the names of the CDE covariate groups. 
+    KM <- SurvObjects.res 
+    fit <- KM[[1]]
+    stats <- as.data.frame(KM[[2]])
+
+    pos <- (max(fit$time)*0.75)
+    type <- type
+    title <- paste(type, sep="")
+      
+    options(scipen=999)
+    pVal <- round(stats$pChisq, digits=4)
+    # print(pVal)
+
+    if ( pVal < 0.001 ){
+      p <- "p < 0.001"
+    }else{
+      p <- paste("p =", pVal, sep=" ")
+    }
+
+    if (length(fit$n) == 4){
+      colors = c("blue","darkturquoise", "darkgoldenrod1", "firebrick")
+    }else if (length(fit$n) == 5){
+      colors = c("blue","darkturquoise", "darkgoldenrod1", "firebrick", "black")
+    }else if (length(fit$n) == 6){
+      colors = c("blue","darkturquoise", "darkgoldenrod1", "firebrick", "black", "darkgreen")
+    }
+
+    
+    plot <- SurvivalPlot(fit, group, "Years", colors)
+    plot$labels$title <- title
+
+    plot <- plot +
+      annotate(geom="text", x=pos, y=1.0, label=p, size=5) 
+  return(plot)
+}
+```
+
+##AAML0531
+
+## OS Plots
+
+```{r}
+lapply(names(CD117.OS),
+       function(i) KM_CustomPlots(CD117.OS[[i]],type="Overall Survival", group=i))
+```
+
+## EFS Plots
+```{r}
+lapply(names(CD117.EFS),
+       function(i) KM_CustomPlots(CD117.EFS[[i]],type="Event Free Survival", group=i))
+```
+
+
+##AAML1031
+
+## OS plots
+```{r}
+lapply(names(OS.1031), 
+       function(i) KM_CustomPlots(OS.1031[[i]], type="Overall Survival", group = i))
+```
+
+
+##EFS plots
+
+```{r}
+lapply(names(EFS.1031), 
+       function(i) KM_CustomPlots(OS.1031[[i]], type="Event Free Survival", group=i))
+```
+
+
+#compare the flow data to the RNA-seq data
+
+```{r}
+flowAntigens <- colnames(flow)[4:16]
+noquote(flowAntigens)
+```
+
+```{r}
+flowMFI.mat <- flow %>% select_(.dots=flowAntigens)
+flowMFI.mat
+```
+
+```{r}
+geneInfo <- read.delim("../Homo_sapiens.gene_info", sep="\t", stringsAsFactors = FALSE, fill=TRUE)
+
+head(geneInfo)
+```
+
+NOTE: 
+This code below does not work. read.table uses a quote as a single quote. So in the gene_info column 
+read.table("../Homo_sapiens.gene_info", sep="\t", header=TRUE, fill=TRUE, stringsAsFactors = FALSE)
+
+Must use read.delim instead. 
+
+Also, for command line:
+> cat Homo_sapiens.gene_info | awk '{print $3"\t"$5}' > Hs_GeneInfo.Symb.Alias.txt
+> genes=(CD45  CD34  CD38  HLADR CD11b CD36  CD15  CD13  CD14  CD33  CD7   CD56  CD117)
+> for gene in ${genes[@]}; do grep -i -E "\b$gene     " Hs_GeneInfo.Symb.Alias.txt; done
+
+the "\b" is a regex for spaces and end of lines. 
+
+```{r}
+dim(geneInfo)
+```
+
+
+```{r}
+alias <- geneInfo %>% 
+  select(Symbol, Synonyms) %>% 
+  mutate(alias=gsub("\\|", " ", paste(Symbol, Synonyms, sep="|")))
+
+alias$alias
+```
+
+```{r}
+regex <- paste0("\\b", flowAntigens, " ") #\b in regex is for beginning of line or the beginning of a column/space
+flowAlias <- lapply(regex, function(x) grep( x, alias$alias, value=TRUE, ignore.case = TRUE)) %>% set_names(flowAntigens)
+flowAlias
+```
+
+
+```{r}
+indices <- lapply(names(flowAlias), 
+                  function(x) which(rownames(LD$remDups) %in% unlist(strsplit(flowAlias[[x]], " ")))) %>%
+  set_names(names(flowAlias))
+
+indices$CD117
+```
+
+```{r}
+names <- intersect(rownames(flow), colnames(LD$remDups))
+CD117.MFI <- flow[names, "CD117"] %>% set_names(names)
+CD117.TPM <- as.numeric(LD$remDups[34493, names]) %>% set_names(names)
+```
+
+```{r}
+CD117.plot <- Reduce(function(x,y) merge(x,y, by.x="TARGET.USI.1", by.y=0), list(CD117.0531, CD117.MFI, CD117.TPM)) 
+colnames(CD117.plot)[83:84] <- c("CD117_MFI", "CD117_TPM")
+
+head(CD117.plot[,80:84])
+```
+
+```{r }
+# pdf(file="TARGET_AML_CD117_MFI_waterfallplot.pdf")
+ggplot(CD117.plot, aes(x=reorder(CD117.plot$TARGET.USI.1,CD117.plot$CD117_MFI), y=CD117_MFI, fill=Primary.Cytogenetic.Code)) +
+  geom_bar(stat="identity") + 
+  theme_JS + 
+  theme(axis.text.x = element_blank()) +
+  labs(x="Patient")
+# dev.off()
+```
+
+```{r}
+# pdf(file="TARGET_AML_CD117_TPM_waterfallplot.pdf")
+ggplot(CD117.plot, aes(x=reorder(CD117.plot$TARGET.USI.1,CD117.plot$CD117_TPM), y=CD117_TPM, fill=Primary.Cytogenetic.Code)) + 
+  geom_bar(stat="identity") + 
+  theme_JS + 
+  theme(axis.text.x = element_blank()) + 
+  labs(x="Patient")
+# dev.off()
+```
+
+
+```{r}
+#Relationship between the CD117 MFI and CD117 TPM
+# pdf(file = "TARGET_AML_CD117_MFI_TPM_plot.pdf")
+CD117.lm <- lm(log2(CD117.plot$CD117_TPM + 1) ~ (log2(CD117.plot$CD117_MFI+1)))
+plot(log2(CD117.plot$CD117_MFI+1), log2(CD117.plot$CD117_TPM + 1), xlab="Log2 CD117 MFI", ylab="Log2 CD117 TPM", col="blue", pch=19)
+abline(CD117.lm)
+# dev.off()
+```
+
+```{r}
+cor(log2(CD117.plot$CD117_MFI+1), log2(CD117.plot$CD117_TPM + 1))
+```
+
+
+
+
+
+
+
+
+
+
+
+
